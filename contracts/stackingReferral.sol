@@ -1,11 +1,13 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.8;
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "hardhat/console.sol";
 
 contract stakingReferral is Ownable {
     struct stakInfo {
         uint256 nftID;
         uint256 lockStartBlockId;
+        uint256 lastClaimBlockId;
         uint256 lockTime;
         uint256 lockedAt;
         /* uint256 calculatedReward;
@@ -15,6 +17,7 @@ contract stakingReferral is Ownable {
     bool public areDepositActive = false; */
     uint256 public rewardPerBlock;
     uint256 public minimumLockTime;
+    uint256 public minimumLockBeforeClaim;
     address public referralNFTaddress;
     address public rewardTokenAddress;
 
@@ -34,12 +37,14 @@ contract stakingReferral is Ownable {
         //bool isPoolOnline,
         uint256 rewardPerBlock,
         uint256 minimumLockTime,
+        uint256 minimumLockBeforeClaim,
         address referralNFTaddress,
         address rewardTokenAddress
     );
     event minimumLockTimeUpdated(uint256 newMinimumLockTime);
     event referralNftAddressUpdated(address indexed newReferralNftAddress);
     event rewardTokenAddressUpdated(address indexed newRewardTokenAddress);
+    event minimumLockBeforeClaimUpdated(uint256 _newMinimumLockTimeBeforeClaim);
 
     constructor() {}
 
@@ -48,61 +53,94 @@ contract stakingReferral is Ownable {
             areDepositActive,
             "deposit on staking platform are not active yet"
         ); */
+        /* console.log("CONTRACT -> depoisit() NFT ID: ", nftId);
+        console.log(
+            "CONTRACT => balanceOf: ",
+            referralCode(referralNFTaddress).balanceOf(msg.sender)
+        ); */
         require(
             msg.sender == referralCode(referralNFTaddress).ownerOf(nftId),
             "You are not the owner of the nft"
         );
         require(
             _lockTime >= minimumLockTime,
-            "lock time below the minimum lock time"
+            "inserted lock time below the minimum lock time"
         );
         addressToStaking[msg.sender].nftID = nftId;
         addressToStaking[msg.sender].lockTime = _lockTime;
         addressToStaking[msg.sender].lockStartBlockId = block.number;
+        addressToStaking[msg.sender].lastClaimBlockId = block.number;
         addressToStaking[msg.sender].lockedAt = block.timestamp;
         referralCode(referralNFTaddress).transferFrom(
             msg.sender,
             address(this),
             nftId
         );
+        /* console.log(
+            "CONTRACT => balanceOf: ",
+            referralCode(referralNFTaddress).balanceOf(msg.sender)
+        ); */
         emit userDeposit(msg.sender, nftId);
     }
 
     function calculateReward() external view returns (uint256) {
+        require(
+            addressToStaking[msg.sender].nftID > 0,
+            "You have not deposited NFTs"
+        );
         uint256 currentBlock = block.number;
-        uint256 depositBlock = addressToStaking[msg.sender].lockStartBlockId;
-        uint256 passedBlocks = currentBlock - depositBlock;
+        uint256 lastClaimBlockId = addressToStaking[msg.sender]
+            .lastClaimBlockId;
+        uint256 passedBlocks = currentBlock - lastClaimBlockId;
         uint256 reward = passedBlocks * rewardPerBlock;
         /*  addressToStaking[msg.sender].calculatedReward = reward;
         addressToStaking[msg.sender].lastRewardsCalculatedAt = block.timestamp; */
+        //console.log("CONTRACT => reward value: ", reward);
         return reward;
     }
 
-    function internalCalculateReward(address owner)
-        private
-        view
-        returns (uint256)
-    {
+    function internalCalculateReward(address owner) private returns (uint256) {
         uint256 currentBlock = block.number;
-        uint256 depositBlock = addressToStaking[owner].lockStartBlockId;
-        uint256 passedBlocks = currentBlock - depositBlock;
+        uint256 lastClaimBlockId = addressToStaking[owner].lastClaimBlockId;
+        uint256 passedBlocks = currentBlock - lastClaimBlockId;
         uint256 reward = passedBlocks * rewardPerBlock;
+        /* console.log(
+            "CONTRACT: internalCalculateReward => currentBlock",
+            currentBlock
+        );
+        console.log(
+            "CONTRACT: internalCalculateReward => lastClaimBlockId",
+            lastClaimBlockId
+        );
+        console.log(
+            "CONTRACT: internalCalculateReward => passedBlocks",
+            passedBlocks
+        );
+        console.log("CONTRACT: internalCalculateReward => reward", reward); */
         /* addressToStaking[owner].calculatedReward = reward;
         addressToStaking[owner].lastRewardsCalculatedAt = block.timestamp; */
+
+        addressToStaking[msg.sender].lastClaimBlockId = block.number;
         return reward;
     }
 
     function claimReward() external {
-        uint256 pendingReward = internalCalculateReward(msg.sender);
-        IBEP20(rewardTokenAddress).transferFrom(
-            address(this),
-            msg.sender,
-            pendingReward
+        require(
+            addressToStaking[msg.sender].nftID > 0,
+            "You have not deposited NFTs"
         );
+        require(
+            block.timestamp >
+                addressToStaking[msg.sender].lockedAt + minimumLockBeforeClaim,
+            "You cannot claim yet"
+        );
+        uint256 pendingReward = internalCalculateReward(msg.sender);
+        IBEP20(rewardTokenAddress).transfer(msg.sender, pendingReward);
         emit userClaim(msg.sender, pendingReward);
     }
 
     function withdraw() external {
+        require(addressToStaking[msg.sender].nftID > 0, "Nothing to withdraw");
         uint256 nftId = addressToStaking[msg.sender].nftID;
         uint256 startLock = addressToStaking[msg.sender].lockedAt;
         uint256 passedTime = block.timestamp - startLock;
@@ -114,20 +152,17 @@ contract stakingReferral is Ownable {
             msg.sender,
             nftId
         );
-        IBEP20(rewardTokenAddress).transferFrom(
-            address(this),
-            msg.sender,
-            pendingReward
-        );
+        IBEP20(rewardTokenAddress).transfer(msg.sender, pendingReward);
         emit userWithdrawn(msg.sender, nftId, pendingReward);
     }
 
     function fundPool(uint256 amount) external onlyOwner {
-        IBEP20(rewardTokenAddress).transferFrom(
+        bool success = IBEP20(rewardTokenAddress).transferFrom(
             msg.sender,
             address(this),
             amount
         );
+        require(success);
         emit poolFunded(amount);
     }
 
@@ -135,18 +170,21 @@ contract stakingReferral is Ownable {
         //bool _isPoolOnline,
         uint256 _rewardPerBlock,
         uint256 _minimumLockTime,
+        uint256 _minimumLockBeforeClaim,
         address _referralNftAddress,
         address _rewardTokenAddress
     ) external onlyOwner {
         //isPoolOnline = _isPoolOnline;
         rewardPerBlock = _rewardPerBlock;
         minimumLockTime = _minimumLockTime;
+        minimumLockBeforeClaim = _minimumLockBeforeClaim;
         referralNFTaddress = _referralNftAddress;
         rewardTokenAddress = _rewardTokenAddress;
         emit poolInitialized(
             //_isPoolOnline,
             _rewardPerBlock,
             _minimumLockTime,
+            minimumLockBeforeClaim,
             _referralNftAddress,
             _rewardTokenAddress
         );
@@ -182,6 +220,31 @@ contract stakingReferral is Ownable {
         rewardTokenAddress = newRewardTokenAddress;
         emit rewardTokenAddressUpdated(newRewardTokenAddress);
     }
+
+    function setMinimumLockBeforeClaim(uint256 _newMinimumLockTimeBeforeClaim)
+        external
+        onlyOwner
+    {
+        minimumLockBeforeClaim = _newMinimumLockTimeBeforeClaim;
+        emit minimumLockBeforeClaimUpdated(_newMinimumLockTimeBeforeClaim);
+    }
+
+    //BETTER SAFE THAN SORRY
+    function retrieveForeignToken(
+        address _token,
+        address _to,
+        uint256 _value
+    ) external onlyOwner returns (bool _sent) {
+        if (_value == 0) {
+            _value = IBEP20(_token).balanceOf(address(this));
+        }
+        _sent = IBEP20(_token).transfer(_to, _value);
+    }
+
+    function sweep() external onlyOwner {
+        uint256 balance = address(this).balance;
+        payable(owner()).transfer(balance);
+    }
 }
 
 interface referralCode {
@@ -192,6 +255,8 @@ interface referralCode {
         address to,
         uint256 tokenId
     ) external;
+
+    function balanceOf(address owner) external view returns (uint256 balance);
 }
 
 interface IBEP20 {

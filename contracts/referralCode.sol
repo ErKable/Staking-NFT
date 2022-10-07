@@ -1,3 +1,4 @@
+//SPDX-License-Identifier: MIT
 pragma solidity ^0.8.8;
 import "@openzeppelin/contracts/utils/Counters.sol";
 import "hardhat/console.sol";
@@ -23,8 +24,10 @@ contract referralSystem is ERC721URIStorage, Ownable {
         //uint256 indexRef;
     }
 
-    uint256 private randomFactor;
+    uint256 private randIncrement;
+    //magari una lista di interi per userToReferrals
     mapping(address => uint256) public userToReferrals; //i referral di un singolo utente
+
     mapping(uint256 => address) public referralToUser; //rapporto 1 a 1 tra referral e proprietario
     mapping(address => mapping(uint256 => referralCode))
         public addressToReferralCodes;
@@ -33,6 +36,7 @@ contract referralSystem is ERC721URIStorage, Ownable {
     mapping(uint256 => uint256) public tokenIdToRarity;
     mapping(uint256 => string) public rarityToUri;
     mapping(uint256 => bool) public expired;
+    mapping(address => uint256[]) public addressToIds;
     uint256[] private rarities = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     uint256 public refereePercentage = 25;
     address public wallet1;
@@ -85,7 +89,7 @@ contract referralSystem is ERC721URIStorage, Ownable {
         );
         referralToUser[referral] = msg.sender; //adding the address to the referral mapping
         uint256 tempIndex = addressToReferralInfos[msg.sender].totalIndex; //search for how many nft are minted by a single holder
-        //if (tempIndex == 0) {
+
         addressToReferralCodes[msg.sender][tempIndex].refCode = referral; //set generated referral
         addressToReferralCodes[msg.sender][tempIndex].tokenId = tokId; //set the ID of the generated NFT
         addressToReferralInfos[msg.sender].refToIndex[referral] = tempIndex;
@@ -93,14 +97,7 @@ contract referralSystem is ERC721URIStorage, Ownable {
             .indexToCode[tempIndex]
             .refCode = referral;
         addressToReferralInfos[msg.sender].totalIndex++;
-        /*         } else {
-            addressToReferralInfos[msg.sender]
-                .indexToCode[tempIndex]
-                .refCode = referral;
 
-            addressToReferralInfos[msg.sender].totalIndex++;
-            addressToReferralInfos[msg.sender].refToIndex[referral] = tempIndex;
-        } */
         emit referralCodeCreated(msg.sender, referral);
         return referral;
     }
@@ -132,12 +129,11 @@ contract referralSystem is ERC721URIStorage, Ownable {
         return referral;
     }
 
-    function adminMint(
-        uint256 rarity,
-        string memory uri,
-        address[] memory receiver
-    ) external onlyOwner {
-        if (bytes(rarityToUri[rarity]).length > 0) {
+    function adminMint(uint256 rarity, address[] memory receiver)
+        external
+        onlyOwner
+    {
+        /* if (bytes(rarityToUri[rarity]).length > 0) {
             rarityToUri[rarity] = uri;
             for (uint256 y = 0; y < receiver.length; y++) {
                 _tokenIds.increment();
@@ -148,20 +144,18 @@ contract referralSystem is ERC721URIStorage, Ownable {
                     receiver[y],
                     newItemId
                 );
+                addressToIds[receiver[y]].push(newItemId);
                 emit adminGiveaway(receiver[y], newItemId, referralCodez);
             }
-        } else {
-            for (uint256 i = 0; i < receiver.length; i++) {
-                _tokenIds.increment();
-                uint256 newItemId = _tokenIds.current();
-                _mint(receiver[i], newItemId);
-                _setTokenURI(newItemId, rarityToUri[rarity]);
-                uint256 referralCodez = adminMintReferral(
-                    receiver[i],
-                    newItemId
-                );
-                emit adminGiveaway(receiver[i], newItemId, referralCodez);
-            }
+        } else { */
+        for (uint256 i = 0; i < receiver.length; i++) {
+            _tokenIds.increment();
+            uint256 newItemId = _tokenIds.current();
+            _mint(receiver[i], newItemId);
+            _setTokenURI(newItemId, rarityToUri[rarity]);
+            uint256 referralCodez = adminMintReferral(receiver[i], newItemId);
+            addressToIds[receiver[i]].push(newItemId);
+            emit adminGiveaway(receiver[i], newItemId, referralCodez);
         }
     }
 
@@ -239,8 +233,6 @@ contract referralSystem is ERC721URIStorage, Ownable {
 
     //utility
 
-    uint256 randIncrement;
-
     function randint() private returns (uint256) {
         uint256 asd = uint256(
             keccak256(abi.encodePacked(block.timestamp, block.difficulty))
@@ -282,7 +274,9 @@ contract referralSystem is ERC721URIStorage, Ownable {
         uint256 random = moreRandom() % 10000;
         uint256 rarity;
         uint256 tempRarity = uint256(
-            keccak256(abi.encodePacked(block.timestamp + random + randomFactor))
+            keccak256(
+                abi.encodePacked(block.timestamp + random + randIncrement)
+            )
         ) % 10;
         if (tempRarity + 1 < 7) {
             rarity = 1; //comune
@@ -295,14 +289,12 @@ contract referralSystem is ERC721URIStorage, Ownable {
     }
 
     //set
-    function setUrisAndPrices(
-        string[] memory uriList,
-        /* uint256[] memory rarityPrices */
-        uint256 price
-    ) external onlyOwner {
+    function setUrisAndPrices(string[] memory uriList, uint256 price)
+        external
+        onlyOwner
+    {
         for (uint256 i = 0; i < uriList.length; i++) {
             rarityToUri[i + 1] = uriList[i];
-            //rarityToPrice[i + 1] = rarityPrices[i];
         }
         nftPrice = price;
     }
@@ -376,5 +368,32 @@ contract referralSystem is ERC721URIStorage, Ownable {
             addressToReferralInfos[owner].indexToCode[index].refCode,
             addressToReferralInfos[owner].indexToCode[index].timeUsed
         );
+    }
+
+    function getTokenRarity(uint256 tokenID) external view returns (uint256) {
+        return tokenIdToRarity[tokenID];
+    }
+
+    function getAddressTotalIndex(address owner)
+        external
+        view
+        returns (uint256)
+    {
+        return addressToReferralInfos[owner].totalIndex;
+    }
+
+    function getAddressReferralFromIndex(address owner, uint256 index)
+        external
+        view
+        returns (uint256)
+    {
+        return addressToReferralInfos[owner].indexToCode[index].refCode;
+    }
+
+    function getAddressReferralIndexFromReferral(
+        address owner,
+        uint256 referral
+    ) external view returns (uint256) {
+        return addressToReferralInfos[owner].refToIndex[referral];
     }
 }
